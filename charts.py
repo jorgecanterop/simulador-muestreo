@@ -47,6 +47,41 @@ def _base_layout(title: str, x_title: str, y_title: str, *, height: int = 520) -
     }
 
 
+def _vertical_interval_segments(
+    positions: np.ndarray,
+    lows: np.ndarray,
+    highs: np.ndarray,
+) -> tuple[list[float | None], list[float | None]]:
+    """Construye segmentos verticales separados por None para Plotly."""
+    x_values: list[float | None] = []
+    y_values: list[float | None] = []
+
+    for position, low, high in zip(positions, lows, highs):
+        x_values.extend((float(position), float(position), None))
+        y_values.extend((float(low), float(high), None))
+
+    return x_values, y_values
+
+
+def _horizontal_cap_segments(
+    positions: np.ndarray,
+    lows: np.ndarray,
+    highs: np.ndarray,
+    half_width: float,
+) -> tuple[list[float | None], list[float | None]]:
+    """Construye pequeñas tapas horizontales en los extremos de cada IC."""
+    x_values: list[float | None] = []
+    y_values: list[float | None] = []
+
+    for position, low, high in zip(positions, lows, highs):
+        left = float(position) - half_width
+        right = float(position) + half_width
+        x_values.extend((left, right, None, left, right, None))
+        y_values.extend((float(low), float(low), None, float(high), float(high), None))
+
+    return x_values, y_values
+
+
 def interval_figure(
     estimates: np.ndarray,
     lows: np.ndarray,
@@ -60,13 +95,12 @@ def interval_figure(
     empirical_reference: float | None = None,
     empirical_reference_label: str = "Centro empírico de las estimaciones",
 ) -> go.Figure:
-    """Grafica estimaciones e intervalos usando barras de error coloreadas.
+    """Grafica puntos e intervalos como trazos independientes y coloreados.
 
-    Cada punto y su intervalo completo comparten el mismo color:
-    azul si contiene la referencia, rojo si no la contiene y violeta para
-    la muestra original. Cuando existe una muestra original, se inserta en
-    el centro del eje X y las repeticiones posteriores se desplazan una
-    posición para evitar superposiciones.
+    Se evita ``error_y`` porque algunos renderizadores de Plotly/Streamlit
+    pueden aplicar a todas las barras el color principal del tema. Aquí cada
+    intervalo se dibuja como un segmento vertical real, por lo que conserva
+    inequívocamente el color de su categoría.
     """
     estimates = np.asarray(estimates, dtype=float)
     lows = np.asarray(lows, dtype=float)
@@ -83,41 +117,70 @@ def interval_figure(
         original_position = None
         simulation_positions = repetition_numbers
 
-    covered = ~misses
     figure = go.Figure()
 
-    for mask, color, label in (
-        (covered, COVERED_COLOR, "Contiene el valor de referencia"),
-        (misses, MISSED_COLOR, "No contiene el valor de referencia"),
-    ):
+    categories = (
+        (~misses, COVERED_COLOR, "Contiene el valor de referencia", 1.55),
+        (misses, MISSED_COLOR, "No contiene el valor de referencia", 2.45),
+    )
+
+    for mask, color, label, line_width in categories:
         selected = np.flatnonzero(mask)
         if selected.size == 0:
             continue
 
+        positions = simulation_positions[selected]
         selected_estimates = estimates[selected]
         selected_lows = lows[selected]
         selected_highs = highs[selected]
         selected_repetitions = repetition_numbers[selected]
 
+        interval_x, interval_y = _vertical_interval_segments(
+            positions,
+            selected_lows,
+            selected_highs,
+        )
+        cap_x, cap_y = _horizontal_cap_segments(
+            positions,
+            selected_lows,
+            selected_highs,
+            half_width=0.16,
+        )
+
+        # Las líneas del intervalo se dibujan como trazos explícitos.
         figure.add_trace(
             go.Scatter(
-                x=simulation_positions[selected],
+                x=interval_x,
+                y=interval_y,
+                mode="lines",
+                line={"color": color, "width": line_width},
+                opacity=0.95,
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=cap_x,
+                y=cap_y,
+                mode="lines",
+                line={"color": color, "width": line_width},
+                opacity=0.95,
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+        # El punto comparte exactamente el mismo color que su intervalo.
+        figure.add_trace(
+            go.Scatter(
+                x=positions,
                 y=selected_estimates,
                 mode="markers",
                 marker={
                     "color": color,
                     "size": 7,
                     "line": {"width": 0},
-                },
-                error_y={
-                    "type": "data",
-                    "symmetric": False,
-                    "array": selected_highs - selected_estimates,
-                    "arrayminus": selected_estimates - selected_lows,
-                    "color": color,
-                    "thickness": 1.4,
-                    "width": 0,
-                    "visible": True,
                 },
                 name=label,
                 customdata=np.column_stack(
@@ -136,7 +199,7 @@ def interval_figure(
         y=reference,
         line={"color": REFERENCE_COLOR, "width": 2, "dash": "dash"},
         annotation_text="Valor de referencia",
-        annotation_position="top right",
+        annotation_position="top left",
     )
 
     if empirical_reference is not None and np.isfinite(empirical_reference):
@@ -144,7 +207,7 @@ def interval_figure(
             y=float(empirical_reference),
             line={"color": EMPIRICAL_REFERENCE_COLOR, "width": 2, "dash": "dot"},
             annotation_text=empirical_reference_label,
-            annotation_position="bottom right",
+            annotation_position="bottom left",
         )
 
     if original_interval is not None and original_position is not None:
@@ -160,6 +223,40 @@ def interval_figure(
             and original_interval.low <= empirical_reference <= original_interval.high
         )
 
+        original_x, original_y = _vertical_interval_segments(
+            np.array([original_position]),
+            np.array([original_interval.low]),
+            np.array([original_interval.high]),
+        )
+        original_cap_x, original_cap_y = _horizontal_cap_segments(
+            np.array([original_position]),
+            np.array([original_interval.low]),
+            np.array([original_interval.high]),
+            half_width=0.42,
+        )
+
+        figure.add_trace(
+            go.Scatter(
+                x=original_x,
+                y=original_y,
+                mode="lines",
+                line={"color": ORIGINAL_INTERVAL_COLOR, "width": 6},
+                opacity=1.0,
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=original_cap_x,
+                y=original_cap_y,
+                mode="lines",
+                line={"color": ORIGINAL_INTERVAL_COLOR, "width": 6},
+                opacity=1.0,
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
         figure.add_trace(
             go.Scatter(
                 x=[original_position],
@@ -170,16 +267,6 @@ def interval_figure(
                     "size": 14,
                     "symbol": "diamond",
                     "line": {"width": 1.5, "color": "white"},
-                },
-                error_y={
-                    "type": "data",
-                    "symmetric": False,
-                    "array": [original_interval.high - original_estimate],
-                    "arrayminus": [original_estimate - original_interval.low],
-                    "color": ORIGINAL_INTERVAL_COLOR,
-                    "thickness": 4,
-                    "width": 8,
-                    "visible": True,
                 },
                 name="IC de la muestra original",
                 customdata=[[
@@ -221,7 +308,8 @@ def interval_figure(
         tick_pairs = [
             (int(position), str(repetition))
             for position, repetition in zip(
-                repetition_tick_positions, repetition_ticks
+                repetition_tick_positions,
+                repetition_ticks,
             )
         ]
         tick_pairs.append((int(original_position), "Muestra original"))
