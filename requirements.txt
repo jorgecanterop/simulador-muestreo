@@ -1,0 +1,6 @@
+streamlit>=1.59,<2
+numpy>=2.0,<3
+pandas>=2.2,<3
+scipy>=1.13,<2
+plotly>=6.0,<7
+orjson>=3.10,<4
