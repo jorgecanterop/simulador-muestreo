@@ -47,18 +47,6 @@ def _base_layout(title: str, x_title: str, y_title: str, *, height: int = 520) -
     }
 
 
-def _segments(x: np.ndarray, lows: np.ndarray, highs: np.ndarray, mask: np.ndarray):
-    selected = np.flatnonzero(mask)
-    if selected.size == 0:
-        return [], []
-    xs: list[float | None] = []
-    ys: list[float | None] = []
-    for index in selected:
-        xs.extend((float(x[index]), float(x[index]), None))
-        ys.extend((float(lows[index]), float(highs[index]), None))
-    return xs, ys
-
-
 def interval_figure(
     estimates: np.ndarray,
     lows: np.ndarray,
@@ -72,12 +60,29 @@ def interval_figure(
     empirical_reference: float | None = None,
     empirical_reference_label: str = "Centro empírico de las estimaciones",
 ) -> go.Figure:
-    """Grafica los IC simulados y, opcionalmente, el IC de la muestra original.
+    """Grafica estimaciones e intervalos usando barras de error coloreadas.
 
-    El intervalo original se ubica en x=0, antes de las repeticiones simuladas,
-    con un trazo más grueso y un marcador romboidal.
+    Cada punto y su intervalo completo comparten el mismo color:
+    azul si contiene la referencia, rojo si no la contiene y violeta para
+    la muestra original. Cuando existe una muestra original, se inserta en
+    el centro del eje X y las repeticiones posteriores se desplazan una
+    posición para evitar superposiciones.
     """
-    x = np.arange(1, estimates.size + 1)
+    estimates = np.asarray(estimates, dtype=float)
+    lows = np.asarray(lows, dtype=float)
+    highs = np.asarray(highs, dtype=float)
+    misses = np.asarray(misses, dtype=bool)
+
+    repetition_numbers = np.arange(1, estimates.size + 1)
+
+    if original_interval is not None:
+        original_position = estimates.size // 2 + 1
+        simulation_positions = repetition_numbers.copy()
+        simulation_positions[simulation_positions >= original_position] += 1
+    else:
+        original_position = None
+        simulation_positions = repetition_numbers
+
     covered = ~misses
     figure = go.Figure()
 
@@ -85,34 +90,47 @@ def interval_figure(
         (covered, COVERED_COLOR, "Contiene el valor de referencia"),
         (misses, MISSED_COLOR, "No contiene el valor de referencia"),
     ):
-        segment_x, segment_y = _segments(x, lows, highs, mask)
-        if segment_x:
-            figure.add_trace(
-                go.Scatter(
-                    x=segment_x,
-                    y=segment_y,
-                    mode="lines",
-                    line={"color": color, "width": 1},
-                    hoverinfo="skip",
-                    showlegend=False,
-                )
-            )
         selected = np.flatnonzero(mask)
-        if selected.size:
-            figure.add_trace(
-                go.Scatter(
-                    x=x[selected],
-                    y=estimates[selected],
-                    mode="markers",
-                    marker={"color": color, "size": 7},
-                    name=label,
-                    customdata=np.column_stack((lows[selected], highs[selected])),
-                    hovertemplate=(
-                        "Repetición %{x}<br>Estimación: %{y:.5g}<br>"
-                        "IC: [%{customdata[0]:.5g}, %{customdata[1]:.5g}]<extra></extra>"
-                    ),
-                )
+        if selected.size == 0:
+            continue
+
+        selected_estimates = estimates[selected]
+        selected_lows = lows[selected]
+        selected_highs = highs[selected]
+        selected_repetitions = repetition_numbers[selected]
+
+        figure.add_trace(
+            go.Scatter(
+                x=simulation_positions[selected],
+                y=selected_estimates,
+                mode="markers",
+                marker={
+                    "color": color,
+                    "size": 7,
+                    "line": {"width": 0},
+                },
+                error_y={
+                    "type": "data",
+                    "symmetric": False,
+                    "array": selected_highs - selected_estimates,
+                    "arrayminus": selected_estimates - selected_lows,
+                    "color": color,
+                    "thickness": 1.4,
+                    "width": 0,
+                    "visible": True,
+                },
+                name=label,
+                customdata=np.column_stack(
+                    (selected_lows, selected_highs, selected_repetitions)
+                ),
+                hovertemplate=(
+                    "Repetición %{customdata[2]:.0f}<br>"
+                    "Estimación: %{y:.5g}<br>"
+                    "IC: [%{customdata[0]:.5g}, %{customdata[1]:.5g}]"
+                    "<extra></extra>"
+                ),
             )
+        )
 
     figure.add_hline(
         y=reference,
@@ -129,7 +147,7 @@ def interval_figure(
             annotation_position="bottom right",
         )
 
-    if original_interval is not None:
+    if original_interval is not None and original_position is not None:
         original_estimate = (
             original_interval.sample_mean
             if original_interval.target == "Media"
@@ -141,37 +159,35 @@ def interval_figure(
             and np.isfinite(empirical_reference)
             and original_interval.low <= empirical_reference <= original_interval.high
         )
-        reference_status = "Sí" if contains_reference else "No"
-        empirical_status = "Sí" if contains_empirical else "No"
 
         figure.add_trace(
             go.Scatter(
-                x=[0, 0],
-                y=[original_interval.low, original_interval.high],
-                mode="lines",
-                line={"color": ORIGINAL_INTERVAL_COLOR, "width": 6},
-                hoverinfo="skip",
-                showlegend=False,
-            )
-        )
-        figure.add_trace(
-            go.Scatter(
-                x=[0],
+                x=[original_position],
                 y=[original_estimate],
                 mode="markers",
                 marker={
                     "color": ORIGINAL_INTERVAL_COLOR,
-                    "size": 13,
+                    "size": 14,
                     "symbol": "diamond",
-                    "line": {"width": 1, "color": "white"},
+                    "line": {"width": 1.5, "color": "white"},
+                },
+                error_y={
+                    "type": "data",
+                    "symmetric": False,
+                    "array": [original_interval.high - original_estimate],
+                    "arrayminus": [original_estimate - original_interval.low],
+                    "color": ORIGINAL_INTERVAL_COLOR,
+                    "thickness": 4,
+                    "width": 8,
+                    "visible": True,
                 },
                 name="IC de la muestra original",
                 customdata=[[
                     original_interval.low,
                     original_interval.high,
                     original_interval.n,
-                    reference_status,
-                    empirical_status,
+                    "Sí" if contains_reference else "No",
+                    "Sí" if contains_empirical else "No",
                 ]],
                 hovertemplate=(
                     "<b>Muestra original</b><br>"
@@ -186,22 +202,36 @@ def interval_figure(
         )
 
     x_title = (
-        "Muestra original y número de repetición"
+        "Número de repetición y muestra original"
         if original_interval is not None
         else "Número de repetición"
     )
     figure.update_layout(**_base_layout(title, x_title, y_title))
 
-    if original_interval is not None:
+    if original_interval is not None and original_position is not None:
         tick_count = min(6, estimates.size)
         repetition_ticks = np.unique(
             np.linspace(1, estimates.size, tick_count, dtype=int)
-        ).tolist()
+        )
+        repetition_tick_positions = repetition_ticks.copy()
+        repetition_tick_positions[
+            repetition_tick_positions >= original_position
+        ] += 1
+
+        tick_pairs = [
+            (int(position), str(repetition))
+            for position, repetition in zip(
+                repetition_tick_positions, repetition_ticks
+            )
+        ]
+        tick_pairs.append((int(original_position), "Muestra original"))
+        tick_pairs.sort(key=lambda pair: pair[0])
+
         figure.update_xaxes(
-            range=[-0.75, estimates.size + 1],
+            range=[0, estimates.size + 2],
             tickmode="array",
-            tickvals=[0, *repetition_ticks],
-            ticktext=["Original", *[str(value) for value in repetition_ticks]],
+            tickvals=[pair[0] for pair in tick_pairs],
+            ticktext=[pair[1] for pair in tick_pairs],
         )
     else:
         figure.update_xaxes(range=[0, estimates.size + 1])
