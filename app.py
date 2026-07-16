@@ -33,22 +33,72 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Solo se ajusta el espaciado y el comportamiento móvil. Los colores, la tipografía
-# y el tamaño base permanecen bajo el control del tema de Streamlit/navegador.
+# Solo se ajustan la geometría y el comportamiento responsive. Los colores,
+# la tipografía y el tamaño base permanecen bajo el control del tema activo
+# de Streamlit y de las preferencias del navegador.
 st.markdown(
     """
     <style>
-      .block-container { padding-top: 1.25rem; padding-bottom: 2.5rem; }
-      div[data-testid="stButton"] > button { min-height: 2.75rem; }
+      .block-container {
+        width: 100%;
+        max-width: 1120px;
+        margin: 0 auto;
+        padding-top: 1.15rem;
+        padding-bottom: 2.5rem;
+        padding-left: 1.5rem;
+        padding-right: 1.5rem;
+      }
+
+      div[data-testid="stButton"] > button {
+        min-height: 2.75rem;
+      }
+
+      div[data-testid="stPills"] [role="listbox"],
+      div[data-testid="stSegmentedControl"] {
+        flex-wrap: wrap;
+      }
+
       @media (max-width: 640px) {
-        .block-container { padding-left: .75rem; padding-right: .75rem; padding-top: .75rem; }
-        div[data-testid="stButton"] > button { width: 100%; }
-        div[data-testid="stPlotlyChart"] { margin-bottom: 1.25rem; }
+        .block-container {
+          max-width: none;
+          padding-left: .75rem;
+          padding-right: .75rem;
+          padding-top: .7rem;
+        }
+
+        div[data-testid="stButton"] > button {
+          width: 100%;
+        }
+
+        div[data-testid="stPlotlyChart"] {
+          margin-bottom: 1.25rem;
+        }
       }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+
+DISTRIBUTION_GROUPS = {
+    "Discretas": (
+        "Bernoulli",
+        "Binomial",
+        "Poisson",
+        "Binomial negativa",
+        "Geométrica",
+        "Hipergeométrica",
+    ),
+    "Continuas": (
+        "Normal",
+        "Exponencial",
+        "Uniforme",
+        "Gamma",
+        "Chi-cuadrado",
+        "t de Student",
+        "F de Fisher",
+    ),
+}
 
 
 def _init_state() -> None:
@@ -187,44 +237,85 @@ def theoretical_mode() -> None:
     )
 
     with st.expander("Configuración de la simulación", expanded=True):
-        distribution_name = st.selectbox(
+        distribution_group = st.segmented_control(
+            "Tipo de distribución",
+            options=tuple(DISTRIBUTION_GROUPS),
+            default="Continuas",
+            selection_mode="single",
+            width="stretch",
+            key="distribution_group",
+        ) or "Continuas"
+
+        distribution_options = DISTRIBUTION_GROUPS[distribution_group]
+        distribution_default = "Normal" if distribution_group == "Continuas" else "Bernoulli"
+        distribution_name = st.pills(
             "Distribución de origen",
-            options=list(DISTRIBUTION_SPECS),
-            index=list(DISTRIBUTION_SPECS).index("Normal"),
-        )
-        parameters = {
-            spec.key: _number_input_for_parameter(distribution_name, spec)
-            for spec in DISTRIBUTION_SPECS[distribution_name]
-        }
-        sample_size = st.number_input(
-            "Tamaño de cada muestra",
-            min_value=2,
-            max_value=MAX_SAMPLE_SIZE,
-            value=30,
-            step=1,
-            format="%d",
-        )
-        repetitions = st.number_input(
-            "Número de repeticiones",
-            min_value=10,
-            max_value=MAX_REPETITIONS,
-            value=200,
-            step=10,
-            format="%d",
-        )
-        confidence = st.number_input(
-            "Nivel de confianza (%)",
-            min_value=50.0,
-            max_value=99.9,
-            value=95.0,
-            step=0.5,
-            format="%.1f",
-        )
-        mean_method_label = st.selectbox(
+            options=distribution_options,
+            default=distribution_default,
+            selection_mode="single",
+            width="stretch",
+            key=f"distribution_choice_{distribution_group}",
+            help="Selección mediante botones: no abre el teclado virtual en teléfonos.",
+        ) or distribution_default
+
+        parameter_specs = DISTRIBUTION_SPECS[distribution_name]
+        parameter_columns = st.columns(min(len(parameter_specs), 3))
+        parameters = {}
+        for index, spec in enumerate(parameter_specs):
+            with parameter_columns[index % len(parameter_columns)]:
+                parameters[spec.key] = _number_input_for_parameter(distribution_name, spec)
+
+        size_column, repetitions_column = st.columns(2)
+        with size_column:
+            sample_size = st.number_input(
+                "Tamaño de cada muestra",
+                min_value=2,
+                max_value=MAX_SAMPLE_SIZE,
+                value=30,
+                step=1,
+                format="%d",
+            )
+        with repetitions_column:
+            repetitions = st.number_input(
+                "Número de repeticiones",
+                min_value=10,
+                max_value=MAX_REPETITIONS,
+                value=200,
+                step=10,
+                format="%d",
+            )
+
+        confidence_column, seed_column = st.columns(2)
+        with confidence_column:
+            confidence = st.number_input(
+                "Nivel de confianza (%)",
+                min_value=50.0,
+                max_value=99.9,
+                value=95.0,
+                step=0.5,
+                format="%.1f",
+            )
+        with seed_column:
+            seed = st.number_input(
+                "Semilla aleatoria",
+                min_value=0,
+                value=2026,
+                step=1,
+                format="%d",
+            )
+
+        mean_method_label = st.pills(
             "Intervalo para la media",
-            ("Z: usar la varianza poblacional", "t: estimar la varianza con la muestra"),
-        )
-        seed = st.number_input("Semilla aleatoria", min_value=0, value=2026, step=1, format="%d")
+            options=(
+                "Z: usar la varianza poblacional",
+                "t: estimar la varianza con la muestra",
+            ),
+            default="Z: usar la varianza poblacional",
+            selection_mode="single",
+            width="stretch",
+            help="Estos botones no contienen un campo de búsqueda.",
+        ) or "Z: usar la varianza poblacional"
+
         st.caption(
             f"Límite preventivo: hasta {MAX_TOTAL_DRAWS:,} observaciones simuladas por ejecución."
         )
@@ -295,10 +386,16 @@ def manual_mode() -> None:
         "Ingrese una observación por fila. La planilla permite agregar o eliminar filas y pegar una columna copiada desde una hoja de cálculo."
     )
 
-    if st.button("Cargar datos de ejemplo", width="stretch"):
+    example_column, clear_column = st.columns(2)
+    with example_column:
+        load_example = st.button("Cargar datos de ejemplo", width="stretch")
+    with clear_column:
+        clear_table = st.button("Limpiar planilla", width="stretch")
+
+    if load_example:
         _replace_manual_data([12.1, 10.8, 11.6, 13.0, 12.4, 11.2, 12.7, 10.9, 11.8, 12.5])
         st.rerun()
-    if st.button("Limpiar planilla", width="stretch"):
+    if clear_table:
         _replace_manual_data()
         st.rerun()
 
@@ -324,17 +421,28 @@ def manual_mode() -> None:
     st.caption(f"Observaciones válidas ingresadas: {values.size}")
 
     with st.expander("Configuración del intervalo y de la simulación", expanded=True):
-        target = st.selectbox("Parámetro de interés", ("Media", "Varianza"))
-        confidence = st.number_input(
-            "Nivel de confianza (%)",
-            min_value=50.0,
-            max_value=99.9,
-            value=95.0,
-            step=0.5,
-            format="%.1f",
-            key="manual_confidence",
-        )
-        known_variance = st.checkbox("La varianza poblacional es conocida")
+        target = st.segmented_control(
+            "Parámetro de interés",
+            options=("Media", "Varianza"),
+            default="Media",
+            selection_mode="single",
+            width="stretch",
+        ) or "Media"
+
+        confidence_column, variance_status_column = st.columns(2)
+        with confidence_column:
+            confidence = st.number_input(
+                "Nivel de confianza (%)",
+                min_value=50.0,
+                max_value=99.9,
+                value=95.0,
+                step=0.5,
+                format="%.1f",
+                key="manual_confidence",
+            )
+        with variance_status_column:
+            known_variance = st.checkbox("La varianza poblacional es conocida")
+
         variance_value = None
         if known_variance:
             variance_value = st.number_input(
@@ -346,33 +454,41 @@ def manual_mode() -> None:
             )
 
         st.markdown("#### Simulación basada en la muestra")
-        simulation_method = st.selectbox(
+        simulation_method = st.pills(
             "Modelo generador",
-            ("Normal ajustada", "Bootstrap"),
+            options=("Normal ajustada", "Bootstrap"),
+            default="Normal ajustada",
+            selection_mode="single",
+            width="stretch",
             help=(
                 "Normal ajustada usa la media y la varianza de referencia. "
                 "Bootstrap remuestrea directamente las observaciones ingresadas."
             ),
-        )
+        ) or "Normal ajustada"
+
         default_n = max(2, int(values.size))
-        sample_size = st.number_input(
-            "Tamaño de las muestras simuladas",
-            min_value=2,
-            max_value=MAX_SAMPLE_SIZE,
-            value=default_n,
-            step=1,
-            format="%d",
-            key="manual_sample_size",
-        )
-        repetitions = st.number_input(
-            "Número de repeticiones",
-            min_value=10,
-            max_value=MAX_REPETITIONS,
-            value=200,
-            step=10,
-            format="%d",
-            key="manual_repetitions",
-        )
+        sample_size_column, repetitions_column = st.columns(2)
+        with sample_size_column:
+            sample_size = st.number_input(
+                "Tamaño de las muestras simuladas",
+                min_value=2,
+                max_value=MAX_SAMPLE_SIZE,
+                value=default_n,
+                step=1,
+                format="%d",
+                key="manual_sample_size",
+            )
+        with repetitions_column:
+            repetitions = st.number_input(
+                "Número de repeticiones",
+                min_value=10,
+                max_value=MAX_REPETITIONS,
+                value=200,
+                step=10,
+                format="%d",
+                key="manual_repetitions",
+            )
+
         seed = st.number_input(
             "Semilla aleatoria",
             min_value=0,
@@ -382,8 +498,15 @@ def manual_mode() -> None:
             key="manual_seed",
         )
 
-        calculate = st.button("Calcular intervalo de la muestra", width="stretch")
-        simulate = st.button("Simular procesos de muestreo", type="primary", width="stretch")
+        calculate_column, simulate_column = st.columns(2)
+        with calculate_column:
+            calculate = st.button("Calcular intervalo de la muestra", width="stretch")
+        with simulate_column:
+            simulate = st.button(
+                "Simular procesos de muestreo",
+                type="primary",
+                width="stretch",
+            )
 
     if calculate:
         try:
@@ -454,11 +577,14 @@ st.write(
     "o calcule y simule intervalos a partir de datos ingresados manualmente."
 )
 
-mode = st.selectbox(
+mode = st.segmented_control(
     "Modo de trabajo",
-    ("Población teórica", "Datos manuales e IC"),
-    help="Este menú es una selección nativa y no admite escritura, por lo que funciona correctamente en dispositivos táctiles.",
-)
+    options=("Población teórica", "Datos manuales e IC"),
+    default="Población teórica",
+    selection_mode="single",
+    width="stretch",
+    help="Selección mediante botones, sin campo de búsqueda ni teclado virtual.",
+) or "Población teórica"
 
 if mode == "Población teórica":
     theoretical_mode()
