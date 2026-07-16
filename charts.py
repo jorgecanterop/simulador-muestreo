@@ -6,7 +6,7 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy import stats
 
-from sampling_core import ManualSimulationResult, TheoreticalResult
+from sampling_core import ManualIntervalResult, ManualSimulationResult, TheoreticalResult
 
 COVERED_COLOR = "#1C83E1"
 MISSED_COLOR = "#FF4B4B"
@@ -14,6 +14,8 @@ REFERENCE_COLOR = "#FFA421"
 ESTIMATE_COLOR = "#21C354"
 FIT_COLOR = "#803DF5"
 SECONDARY_COLOR = "#B9789F"
+ORIGINAL_INTERVAL_COLOR = "#A855F7"
+EMPIRICAL_REFERENCE_COLOR = "#21C354"
 
 PLOTLY_CONFIG = {
     "displaylogo": False,
@@ -65,7 +67,16 @@ def interval_figure(
     reference: float,
     title: str,
     y_title: str,
+    *,
+    original_interval: ManualIntervalResult | None = None,
+    empirical_reference: float | None = None,
+    empirical_reference_label: str = "Centro empírico de las estimaciones",
 ) -> go.Figure:
+    """Grafica los IC simulados y, opcionalmente, el IC de la muestra original.
+
+    El intervalo original se ubica en x=0, antes de las repeticiones simuladas,
+    con un trazo más grueso y un marcador romboidal.
+    """
     x = np.arange(1, estimates.size + 1)
     covered = ~misses
     figure = go.Figure()
@@ -109,8 +120,92 @@ def interval_figure(
         annotation_text="Valor de referencia",
         annotation_position="top right",
     )
-    figure.update_layout(**_base_layout(title, "Número de repetición", y_title))
-    figure.update_xaxes(range=[0, estimates.size + 1])
+
+    if empirical_reference is not None and np.isfinite(empirical_reference):
+        figure.add_hline(
+            y=float(empirical_reference),
+            line={"color": EMPIRICAL_REFERENCE_COLOR, "width": 2, "dash": "dot"},
+            annotation_text=empirical_reference_label,
+            annotation_position="bottom right",
+        )
+
+    if original_interval is not None:
+        original_estimate = (
+            original_interval.sample_mean
+            if original_interval.target == "Media"
+            else original_interval.sample_variance
+        )
+        contains_reference = original_interval.low <= reference <= original_interval.high
+        contains_empirical = (
+            empirical_reference is not None
+            and np.isfinite(empirical_reference)
+            and original_interval.low <= empirical_reference <= original_interval.high
+        )
+        reference_status = "Sí" if contains_reference else "No"
+        empirical_status = "Sí" if contains_empirical else "No"
+
+        figure.add_trace(
+            go.Scatter(
+                x=[0, 0],
+                y=[original_interval.low, original_interval.high],
+                mode="lines",
+                line={"color": ORIGINAL_INTERVAL_COLOR, "width": 6},
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+        figure.add_trace(
+            go.Scatter(
+                x=[0],
+                y=[original_estimate],
+                mode="markers",
+                marker={
+                    "color": ORIGINAL_INTERVAL_COLOR,
+                    "size": 13,
+                    "symbol": "diamond",
+                    "line": {"width": 1, "color": "white"},
+                },
+                name="IC de la muestra original",
+                customdata=[[
+                    original_interval.low,
+                    original_interval.high,
+                    original_interval.n,
+                    reference_status,
+                    empirical_status,
+                ]],
+                hovertemplate=(
+                    "<b>Muestra original</b><br>"
+                    "Estimación: %{y:.5g}<br>"
+                    "IC: [%{customdata[0]:.5g}, %{customdata[1]:.5g}]<br>"
+                    "n original: %{customdata[2]}<br>"
+                    "¿Incluye la referencia?: %{customdata[3]}<br>"
+                    "¿Incluye el centro empírico?: %{customdata[4]}"
+                    "<extra></extra>"
+                ),
+            )
+        )
+
+    x_title = (
+        "Muestra original y número de repetición"
+        if original_interval is not None
+        else "Número de repetición"
+    )
+    figure.update_layout(**_base_layout(title, x_title, y_title))
+
+    if original_interval is not None:
+        tick_count = min(6, estimates.size)
+        repetition_ticks = np.unique(
+            np.linspace(1, estimates.size, tick_count, dtype=int)
+        ).tolist()
+        figure.update_xaxes(
+            range=[-0.75, estimates.size + 1],
+            tickmode="array",
+            tickvals=[0, *repetition_ticks],
+            ticktext=["Original", *[str(value) for value in repetition_ticks]],
+        )
+    else:
+        figure.update_xaxes(range=[0, estimates.size + 1])
+
     return figure
 
 

@@ -345,7 +345,7 @@ def theoretical_mode() -> None:
     st.markdown("### Resumen numérico")
     _show_theoretical_summary(result)
 
-    st.markdown("### 1. Intervalos de confianza de las medias")
+    st.markdown("### Intervalos de confianza de las medias")
     _plot(
         interval_figure(
             result.means,
@@ -359,10 +359,10 @@ def theoretical_mode() -> None:
         "theory_mean_intervals",
     )
 
-    st.markdown("### 2. Histograma de las medias muestrales")
+    st.markdown("### Histograma de las medias muestrales")
     _plot(mean_histogram_figure(result), "theory_mean_histogram")
 
-    st.markdown("### 3. Intervalos de confianza de las varianzas")
+    st.markdown("### Intervalos de confianza de las varianzas")
     _plot(
         interval_figure(
             result.variances,
@@ -376,7 +376,7 @@ def theoretical_mode() -> None:
         "theory_variance_intervals",
     )
 
-    st.markdown("### 4. Histograma de las varianzas muestrales")
+    st.markdown("### Histograma de las varianzas muestrales")
     _plot(variance_histogram_figure(result), "theory_variance_histogram")
 
 
@@ -523,6 +523,14 @@ def manual_mode() -> None:
     if simulate:
         try:
             with st.spinner("Simulando muestras e intervalos..."):
+                # El intervalo de la muestra original se construye con el mismo
+                # parámetro objetivo, nivel de confianza y conocimiento de σ².
+                st.session_state.manual_interval_result = calculate_manual_interval(
+                    values=values,
+                    target=target,
+                    confidence_percent=float(confidence),
+                    known_population_variance=variance_value,
+                )
                 st.session_state.manual_simulation_result = simulate_from_manual_data(
                     values=values,
                     target=target,
@@ -551,7 +559,27 @@ def manual_mode() -> None:
     _show_manual_simulation_summary(simulation_result)
 
     y_title = "Media muestral" if simulation_result.target == "Media" else "Varianza muestral S²"
-    st.markdown("### 1. Intervalos generados en cada repetición")
+    interval_heading = (
+        "Intervalos de confianza de las medias"
+        if simulation_result.target == "Media"
+        else "Intervalos de confianza de las varianzas"
+    )
+    empirical_reference = float(simulation_result.estimates.mean())
+    empirical_reference_label = (
+        "Media de las medias simuladas"
+        if simulation_result.target == "Media"
+        else "Media de las varianzas simuladas"
+    )
+
+    compatible_original_interval = (
+        interval_result
+        if interval_result is not None
+        and interval_result.target == simulation_result.target
+        and np.isclose(interval_result.confidence, simulation_result.confidence)
+        else None
+    )
+
+    st.markdown(f"### {interval_heading}")
     _plot(
         interval_figure(
             simulation_result.estimates,
@@ -561,11 +589,43 @@ def manual_mode() -> None:
             simulation_result.reference,
             f"{simulation_result.interval_name}: intervalos por repetición",
             y_title,
+            original_interval=compatible_original_interval,
+            empirical_reference=empirical_reference,
+            empirical_reference_label=empirical_reference_label,
         ),
         "manual_intervals",
     )
 
-    st.markdown("### 2. Distribución del estadístico estandarizado")
+    if compatible_original_interval is not None:
+        includes_reference = (
+            compatible_original_interval.low
+            <= simulation_result.reference
+            <= compatible_original_interval.high
+        )
+        includes_empirical = (
+            compatible_original_interval.low
+            <= empirical_reference
+            <= compatible_original_interval.high
+        )
+        reference_text = "sí contiene" if includes_reference else "no contiene"
+        empirical_text = "sí contiene" if includes_empirical else "no contiene"
+        comparison_message = (
+            f"El IC de la muestra original "
+            f"[{format_number(compatible_original_interval.low)}, "
+            f"{format_number(compatible_original_interval.high)}] "
+            f"{reference_text} el valor de referencia "
+            f"({format_number(simulation_result.reference)}) y "
+            f"{empirical_text} el centro empírico de las estimaciones simuladas "
+            f"({format_number(empirical_reference)})."
+        )
+        if includes_reference and includes_empirical:
+            st.success(comparison_message)
+        elif includes_reference or includes_empirical:
+            st.warning(comparison_message)
+        else:
+            st.error(comparison_message)
+
+    st.markdown("### Distribución del estadístico estandarizado")
     _plot(pivot_histogram_figure(simulation_result), "manual_pivot_histogram")
 
 
@@ -599,6 +659,8 @@ with st.expander("Supuestos estadísticos y lectura de los gráficos"):
         - El intervalo **t** utiliza la varianza estimada mediante la muestra.
         - El intervalo **χ²** para la varianza es exacto cuando la población es normal.
         - En los gráficos de intervalos, el color rojo identifica las repeticiones cuyo intervalo no contiene el valor de referencia.
+        - En el modo manual, el intervalo de la muestra original aparece antes de las repeticiones, en color violeta y con un marcador romboidal.
+        - La línea punteada verde representa el centro empírico de las estimaciones obtenidas en las simulaciones.
         - En el modo manual, los histogramas muestran el estadístico estandarizado, porque las distribuciones Z, t y χ² describen ese estadístico y no directamente los estimadores sin estandarizar.
         """
     )
