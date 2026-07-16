@@ -47,39 +47,46 @@ def _base_layout(title: str, x_title: str, y_title: str, *, height: int = 520) -
     }
 
 
-def _vertical_interval_segments(
-    positions: np.ndarray,
-    lows: np.ndarray,
-    highs: np.ndarray,
-) -> tuple[list[float | None], list[float | None]]:
-    """Construye segmentos verticales separados por None para Plotly."""
-    x_values: list[float | None] = []
-    y_values: list[float | None] = []
+def _add_interval_shape(
+    figure: go.Figure,
+    *,
+    position: float,
+    low: float,
+    high: float,
+    color: str,
+    width: float,
+    cap_half_width: float = 0.0,
+) -> None:
+    """Añade un IC como formas Plotly con color fijo.
 
-    for position, low, high in zip(positions, lows, highs):
-        x_values.extend((float(position), float(position), None))
-        y_values.extend((float(low), float(high), None))
+    Las formas de ``layout.shapes`` no son recoloreadas por el tema de
+    Streamlit, a diferencia de algunos trazos de línea.
+    """
+    figure.add_shape(
+        type="line",
+        x0=float(position),
+        x1=float(position),
+        y0=float(low),
+        y1=float(high),
+        xref="x",
+        yref="y",
+        line={"color": color, "width": width},
+        layer="above",
+    )
 
-    return x_values, y_values
-
-
-def _horizontal_cap_segments(
-    positions: np.ndarray,
-    lows: np.ndarray,
-    highs: np.ndarray,
-    half_width: float,
-) -> tuple[list[float | None], list[float | None]]:
-    """Construye pequeñas tapas horizontales en los extremos de cada IC."""
-    x_values: list[float | None] = []
-    y_values: list[float | None] = []
-
-    for position, low, high in zip(positions, lows, highs):
-        left = float(position) - half_width
-        right = float(position) + half_width
-        x_values.extend((left, right, None, left, right, None))
-        y_values.extend((float(low), float(low), None, float(high), float(high), None))
-
-    return x_values, y_values
+    if cap_half_width > 0:
+        for endpoint in (low, high):
+            figure.add_shape(
+                type="line",
+                x0=float(position) - cap_half_width,
+                x1=float(position) + cap_half_width,
+                y0=float(endpoint),
+                y1=float(endpoint),
+                xref="x",
+                yref="y",
+                line={"color": color, "width": width},
+                layer="above",
+            )
 
 
 def interval_figure(
@@ -95,12 +102,11 @@ def interval_figure(
     empirical_reference: float | None = None,
     empirical_reference_label: str = "Centro empírico de las estimaciones",
 ) -> go.Figure:
-    """Grafica puntos e intervalos como trazos independientes y coloreados.
+    """Grafica los IC mediante formas con colores no modificables por el tema.
 
-    Se evita ``error_y`` porque algunos renderizadores de Plotly/Streamlit
-    pueden aplicar a todas las barras el color principal del tema. Aquí cada
-    intervalo se dibuja como un segmento vertical real, por lo que conserva
-    inequívocamente el color de su categoría.
+    Azul: contiene la referencia.
+    Rojo: no contiene la referencia.
+    Violeta: intervalo de la muestra original.
     """
     estimates = np.asarray(estimates, dtype=float)
     lows = np.asarray(lows, dtype=float)
@@ -119,72 +125,46 @@ def interval_figure(
 
     figure = go.Figure()
 
-    categories = (
-        (~misses, COVERED_COLOR, "Contiene el valor de referencia", 1.55),
-        (misses, MISSED_COLOR, "No contiene el valor de referencia", 2.45),
-    )
+    # Los intervalos se dibujan uno por uno como shapes para impedir que
+    # Streamlit sustituya sus colores por el color primario del tema.
+    for index, position in enumerate(simulation_positions):
+        color = MISSED_COLOR if misses[index] else COVERED_COLOR
+        width = 1.8 if misses[index] else 1.15
+        _add_interval_shape(
+            figure,
+            position=float(position),
+            low=float(lows[index]),
+            high=float(highs[index]),
+            color=color,
+            width=width,
+        )
 
-    for mask, color, label, line_width in categories:
+    # Los puntos quedan pequeños: la información principal es el IC coloreado.
+    for mask, color, label in (
+        (~misses, COVERED_COLOR, "Contiene el valor de referencia"),
+        (misses, MISSED_COLOR, "No contiene el valor de referencia"),
+    ):
         selected = np.flatnonzero(mask)
         if selected.size == 0:
             continue
 
-        positions = simulation_positions[selected]
-        selected_estimates = estimates[selected]
-        selected_lows = lows[selected]
-        selected_highs = highs[selected]
-        selected_repetitions = repetition_numbers[selected]
-
-        interval_x, interval_y = _vertical_interval_segments(
-            positions,
-            selected_lows,
-            selected_highs,
-        )
-        cap_x, cap_y = _horizontal_cap_segments(
-            positions,
-            selected_lows,
-            selected_highs,
-            half_width=0.16,
-        )
-
-        # Las líneas del intervalo se dibujan como trazos explícitos.
         figure.add_trace(
             go.Scatter(
-                x=interval_x,
-                y=interval_y,
-                mode="lines",
-                line={"color": color, "width": line_width},
-                opacity=0.95,
-                hoverinfo="skip",
-                showlegend=False,
-            )
-        )
-        figure.add_trace(
-            go.Scatter(
-                x=cap_x,
-                y=cap_y,
-                mode="lines",
-                line={"color": color, "width": line_width},
-                opacity=0.95,
-                hoverinfo="skip",
-                showlegend=False,
-            )
-        )
-
-        # El punto comparte exactamente el mismo color que su intervalo.
-        figure.add_trace(
-            go.Scatter(
-                x=positions,
-                y=selected_estimates,
+                x=simulation_positions[selected],
+                y=estimates[selected],
                 mode="markers",
                 marker={
                     "color": color,
-                    "size": 7,
+                    "size": 4.5,
                     "line": {"width": 0},
                 },
                 name=label,
                 customdata=np.column_stack(
-                    (selected_lows, selected_highs, selected_repetitions)
+                    (
+                        lows[selected],
+                        highs[selected],
+                        repetition_numbers[selected],
+                    )
                 ),
                 hovertemplate=(
                     "Repetición %{customdata[2]:.0f}<br>"
@@ -198,16 +178,39 @@ def interval_figure(
     figure.add_hline(
         y=reference,
         line={"color": REFERENCE_COLOR, "width": 2, "dash": "dash"},
-        annotation_text="Valor de referencia",
-        annotation_position="top left",
     )
 
     if empirical_reference is not None and np.isfinite(empirical_reference):
         figure.add_hline(
             y=float(empirical_reference),
             line={"color": EMPIRICAL_REFERENCE_COLOR, "width": 2, "dash": "dot"},
-            annotation_text=empirical_reference_label,
-            annotation_position="bottom left",
+        )
+
+    # Entradas invisibles para una leyenda clara de las líneas horizontales.
+    figure.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="lines",
+            line={"color": REFERENCE_COLOR, "width": 2, "dash": "dash"},
+            name="Valor de referencia",
+            hoverinfo="skip",
+        )
+    )
+    if empirical_reference is not None and np.isfinite(empirical_reference):
+        figure.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="lines",
+                line={
+                    "color": EMPIRICAL_REFERENCE_COLOR,
+                    "width": 2,
+                    "dash": "dot",
+                },
+                name=empirical_reference_label,
+                hoverinfo="skip",
+            )
         )
 
     if original_interval is not None and original_position is not None:
@@ -223,40 +226,16 @@ def interval_figure(
             and original_interval.low <= empirical_reference <= original_interval.high
         )
 
-        original_x, original_y = _vertical_interval_segments(
-            np.array([original_position]),
-            np.array([original_interval.low]),
-            np.array([original_interval.high]),
-        )
-        original_cap_x, original_cap_y = _horizontal_cap_segments(
-            np.array([original_position]),
-            np.array([original_interval.low]),
-            np.array([original_interval.high]),
-            half_width=0.42,
+        _add_interval_shape(
+            figure,
+            position=float(original_position),
+            low=float(original_interval.low),
+            high=float(original_interval.high),
+            color=ORIGINAL_INTERVAL_COLOR,
+            width=3.2,
+            cap_half_width=0.32,
         )
 
-        figure.add_trace(
-            go.Scatter(
-                x=original_x,
-                y=original_y,
-                mode="lines",
-                line={"color": ORIGINAL_INTERVAL_COLOR, "width": 6},
-                opacity=1.0,
-                hoverinfo="skip",
-                showlegend=False,
-            )
-        )
-        figure.add_trace(
-            go.Scatter(
-                x=original_cap_x,
-                y=original_cap_y,
-                mode="lines",
-                line={"color": ORIGINAL_INTERVAL_COLOR, "width": 6},
-                opacity=1.0,
-                hoverinfo="skip",
-                showlegend=False,
-            )
-        )
         figure.add_trace(
             go.Scatter(
                 x=[original_position],
@@ -264,9 +243,9 @@ def interval_figure(
                 mode="markers",
                 marker={
                     "color": ORIGINAL_INTERVAL_COLOR,
-                    "size": 14,
+                    "size": 9,
                     "symbol": "diamond",
-                    "line": {"width": 1.5, "color": "white"},
+                    "line": {"width": 1, "color": "white"},
                 },
                 name="IC de la muestra original",
                 customdata=[[

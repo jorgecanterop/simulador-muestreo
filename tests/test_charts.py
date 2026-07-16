@@ -9,16 +9,15 @@ from charts import (
 from sampling_core import calculate_manual_interval
 
 
-def _line_traces_with_color(figure, color):
+def _vertical_shapes(figure):
     return [
-        trace
-        for trace in figure.data
-        if getattr(trace, "mode", None) == "lines"
-        and trace.line.color == color
+        shape
+        for shape in figure.layout.shapes
+        if shape.type == "line" and shape.x0 == shape.x1
     ]
 
 
-def test_interval_segments_use_explicit_category_colors():
+def test_interval_shapes_have_blue_and_red_colors():
     estimates = np.array([10.0, 11.0, 12.0, 13.0])
     lows = np.array([9.0, 10.0, 11.0, 12.4])
     highs = np.array([11.0, 12.0, 13.0, 13.6])
@@ -34,26 +33,12 @@ def test_interval_segments_use_explicit_category_colors():
         y_title="Media",
     )
 
-    blue_lines = _line_traces_with_color(figure, COVERED_COLOR)
-    red_lines = _line_traces_with_color(figure, MISSED_COLOR)
-
-    # Dos trazos por categoría: segmentos verticales y tapas horizontales.
-    assert len(blue_lines) == 2
-    assert len(red_lines) == 2
-
-    covered_marker = next(
-        trace for trace in figure.data
-        if trace.name == "Contiene el valor de referencia"
-    )
-    missed_marker = next(
-        trace for trace in figure.data
-        if trace.name == "No contiene el valor de referencia"
-    )
-    assert covered_marker.marker.color == COVERED_COLOR
-    assert missed_marker.marker.color == MISSED_COLOR
+    colors = [shape.line.color for shape in _vertical_shapes(figure)]
+    assert colors.count(COVERED_COLOR) == 3
+    assert colors.count(MISSED_COLOR) == 1
 
 
-def test_original_interval_is_explicitly_violet_and_centered():
+def test_manual_interval_is_violet_and_centered():
     original = calculate_manual_interval(
         values=[10, 11, 12, 13, 14],
         target="Media",
@@ -77,15 +62,19 @@ def test_original_interval_is_explicitly_violet_and_centered():
         empirical_reference=float(estimates.mean()),
     )
 
-    violet_lines = _line_traces_with_color(figure, ORIGINAL_INTERVAL_COLOR)
-    assert len(violet_lines) == 2
-    assert all(trace.line.width == 6 for trace in violet_lines)
+    expected_position = estimates.size // 2 + 1
+    violet_vertical = [
+        shape
+        for shape in _vertical_shapes(figure)
+        if shape.line.color == ORIGINAL_INTERVAL_COLOR
+    ]
+    assert len(violet_vertical) == 1
+    assert violet_vertical[0].x0 == expected_position
+    assert violet_vertical[0].line.width == 3.2
 
-    original_marker = next(
+    marker = next(
         trace for trace in figure.data
         if trace.name == "IC de la muestra original"
     )
-    expected_position = estimates.size // 2 + 1
-    assert list(original_marker.x) == [expected_position]
-    assert original_marker.marker.color == ORIGINAL_INTERVAL_COLOR
-    assert original_marker.marker.symbol == "diamond"
+    assert marker.marker.size == 9
+    assert marker.marker.color == ORIGINAL_INTERVAL_COLOR
